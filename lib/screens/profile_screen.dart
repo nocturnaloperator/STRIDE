@@ -2,8 +2,11 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/activity.dart';
 import '../models/user_profile.dart';
+import '../providers/activity_history_provider.dart';
 import '../providers/profile_provider.dart';
+import '../utils/formatting.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key, required this.userId});
@@ -19,7 +22,8 @@ class ProfileScreen extends ConsumerWidget {
         loading: () => const _ProfileSkeleton(),
         error: (error, _) => _ProfileError(
           message: error.toString(),
-          onRetry: () => ref.read(profileProvider(userId).notifier).refresh(),
+          onRetry: () =>
+              ref.read(profileProvider(userId).notifier).refresh(),
         ),
         data: (profile) => _ProfileBody(
           userId: userId,
@@ -31,11 +35,8 @@ class ProfileScreen extends ConsumerWidget {
 }
 
 /// Splits the screen into a scrolling header (cover photo + stats) and a
-/// pinned TabBar, using the SliverOverlapAbsorber/Injector pattern. This
-/// is the piece most hand-rolled profile screens get wrong: without it,
-/// NestedScrollView + TabBarView shows a visible seam and double-scroll
-/// glitches when the inner tab content scrolls independently.
-class _ProfileBody extends StatelessWidget {
+/// pinned TabBar, using the SliverOverlapAbsorber/Injector pattern.
+class _ProfileBody extends ConsumerWidget {
   const _ProfileBody({
     required this.userId,
     required this.profile,
@@ -51,18 +52,22 @@ class _ProfileBody extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final historyAsync = ref.watch(activityHistoryProvider);
+
     return DefaultTabController(
       length: _tabs.length,
       child: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverOverlapAbsorber(
-            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            handle:
+                NestedScrollView.sliverOverlapAbsorberHandleFor(context),
             sliver: SliverAppBar(
               pinned: true,
               stretch: true,
               expandedHeight: 260,
-              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              backgroundColor:
+                  Theme.of(context).scaffoldBackgroundColor,
               flexibleSpace: FlexibleSpaceBar(
                 background: _ProfileHeader(
                   profile: profile,
@@ -88,20 +93,58 @@ class _ProfileBody extends StatelessWidget {
               slivers: [
                 SliverPadding(
                   padding: const EdgeInsets.all(16),
-                  // Manual separated-list pattern: Flutter has no
-                  // built-in "SliverList.separated", so odd indices
-                  // render a gap and even indices render a tile.
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        if (index.isOdd) {
-                          return const SizedBox(height: 12);
-                        }
-
-                        return _ActivityTile(index: index ~/ 2);
-                      },
-                      childCount: 12 * 2 - 1,
+                  sliver: historyAsync.when(
+                    loading: () => const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                      ),
                     ),
+                    error: (error, stackTrace) =>
+                        SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Could not load activities.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                    data: (activities) {
+                      if (activities.isEmpty) {
+                        return const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Center(
+                              child: Text(
+                                'No activities yet.',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                bottom: index == activities.length - 1
+                                    ? 0
+                                    : 12,
+                              ),
+                              child: _ActivityTile(
+                                activity: activities[index],
+                              ),
+                            );
+                          },
+                          childCount: activities.length,
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],
@@ -155,9 +198,6 @@ class _ProfileBody extends StatelessWidget {
   }
 }
 
-/// Wraps each tab's content in its own CustomScrollView with the required
-/// SliverOverlapInjector, and gives it a PageStorageKey so scroll position
-/// is preserved per-tab when switching back and forth.
 class _SliverTab extends StatelessWidget {
   const _SliverTab({
     required this.tag,
@@ -175,7 +215,9 @@ class _SliverTab extends StatelessWidget {
         slivers: [
           SliverOverlapInjector(
             handle:
-                NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+                NestedScrollView.sliverOverlapAbsorberHandleFor(
+              context,
+            ),
           ),
           ...slivers,
         ],
@@ -231,15 +273,15 @@ class _ProfileHeader extends StatelessWidget {
               ? CachedNetworkImage(
                   imageUrl: profile.coverPhotoUrl!,
                   fit: BoxFit.cover,
-                  placeholder: (_, _) => Container(
-                    color: Colors.grey.shade300,
-                  ),
-                  errorWidget: (_, _, _) => Container(
-                    color: Colors.grey.shade400,
-                  ),
+                  placeholder: (_, __) =>
+                      Container(color: Colors.grey.shade300),
+                  errorWidget: (_, __, ___) =>
+                      Container(color: Colors.grey.shade400),
                 )
               : Container(
-                  color: Theme.of(context).colorScheme.primaryContainer,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .primaryContainer,
                 ),
         ),
         DecoratedBox(
@@ -325,10 +367,14 @@ class _FollowButton extends ConsumerWidget {
       onPressed: () =>
           ref.read(profileProvider(userId).notifier).toggleFollow(),
       style: FilledButton.styleFrom(
-        backgroundColor: isFollowing ? Colors.white24 : Colors.white,
-        foregroundColor: isFollowing ? Colors.white : Colors.black,
+        backgroundColor:
+            isFollowing ? Colors.white24 : Colors.white,
+        foregroundColor:
+            isFollowing ? Colors.white : Colors.black,
       ),
-      child: Text(isFollowing ? 'Following' : 'Follow'),
+      child: Text(
+        isFollowing ? 'Following' : 'Follow',
+      ),
     );
   }
 }
@@ -406,18 +452,47 @@ class _StatItem extends StatelessWidget {
 }
 
 class _ActivityTile extends StatelessWidget {
-  const _ActivityTile({required this.index});
+  const _ActivityTile({
+    required this.activity,
+  });
 
-  final int index;
+  final Activity activity;
 
   @override
   Widget build(BuildContext context) {
+    final duration = Duration(
+      seconds: activity.durationSeconds,
+    );
+
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    final durationText = hours > 0
+        ? '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}'
+        : '$minutes:${seconds.toString().padLeft(2, '0')}';
+
+    final paceText = formatPace(activity.paceMinPerKm);
+
+    final date = activity.startedAt;
+
+    final dateText =
+        '${date.day.toString().padLeft(2, '0')}/'
+        '${date.month.toString().padLeft(2, '0')}/'
+        '${date.year}';
+
     return Card(
       margin: EdgeInsets.zero,
       child: ListTile(
         leading: const Icon(Icons.directions_run),
-        title: Text('Morning Run #$index'),
-        subtitle: const Text('5.2 km · 26:14 · 4:59/km'),
+        title: Text(
+          'Run · $dateText',
+        ),
+        subtitle: Text(
+          '${activity.distanceKm.toStringAsFixed(2)} km · '
+          '$durationText · '
+          '$paceText/km',
+        ),
       ),
     );
   }
@@ -456,7 +531,7 @@ class _AchievementBadge extends StatelessWidget {
 }
 
 class _PhotoTile extends StatelessWidget {
-  const _PhotoTile();
+  const _PhotoTile({super.key});
 
   @override
   Widget build(BuildContext context) {
