@@ -41,6 +41,7 @@ class Activity {
     this.distanceMeters = 0,
     this.durationSeconds = 0,
     this.pausedDurationSeconds = 0,
+    this.currentPaceMinPerKm,
   });
 
   final String id;
@@ -51,6 +52,12 @@ class Activity {
   final double distanceMeters;
   final int durationSeconds;
   final int pausedDurationSeconds;
+
+  /// A smoothed pace based on recent trusted GPS movement.
+  ///
+  /// This intentionally remains separate from [paceMinPerKm], which is the
+  /// average pace for the whole activity.
+  final double? currentPaceMinPerKm;
 
   double get distanceKm => distanceMeters / 1000;
 
@@ -70,6 +77,8 @@ class Activity {
     double? distanceMeters,
     int? durationSeconds,
     int? pausedDurationSeconds,
+    double? currentPaceMinPerKm,
+    bool clearCurrentPace = false,
   }) {
     return Activity(
       id: id,
@@ -81,6 +90,9 @@ class Activity {
       durationSeconds: durationSeconds ?? this.durationSeconds,
       pausedDurationSeconds:
           pausedDurationSeconds ?? this.pausedDurationSeconds,
+      currentPaceMinPerKm: clearCurrentPace
+          ? null
+          : currentPaceMinPerKm ?? this.currentPaceMinPerKm,
     );
   }
 
@@ -95,6 +107,7 @@ class Activity {
           distanceMeters == other.distanceMeters &&
           durationSeconds == other.durationSeconds &&
           pausedDurationSeconds == other.pausedDurationSeconds &&
+          currentPaceMinPerKm == other.currentPaceMinPerKm &&
           listEquals(route, other.route));
 
   @override
@@ -106,6 +119,7 @@ class Activity {
         distanceMeters,
         durationSeconds,
         pausedDurationSeconds,
+        currentPaceMinPerKm,
         Object.hashAll(route),
       );
 }
