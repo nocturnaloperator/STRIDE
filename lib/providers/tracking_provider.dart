@@ -24,8 +24,13 @@ final trackingProvider = NotifierProvider<TrackingNotifier, Activity>(
 );
 
 class TrackingNotifier extends Notifier<Activity> {
+  static const _paceWindow = Duration(seconds: 60);
+  static const _paceMinimumDistanceMeters = 35.0;
+  static const _paceMinimumDurationSeconds = 12.0;
+
   StreamSubscription<Position>? _positionSub;
   Timer? _ticker;
+  final List<_TrustedSegment> _recentSegments = [];
 
   @override
   Activity build() {
@@ -43,6 +48,10 @@ class TrackingNotifier extends Notifier<Activity> {
     );
   }
 
+  void _resetGpsProcessing() {
+    _recentSegments.clear();
+  }
+
   /// Checks GPS and permissions, then starts recording.
   Future<void> start() async {
     debugPrint('STRIDE: start() called');
@@ -55,6 +64,7 @@ class TrackingNotifier extends Notifier<Activity> {
 
     // Clean up anything left over from a previous attempt.
     _cleanup();
+    _resetGpsProcessing();
 
     ref.read(trackingErrorProvider.notifier).state = null;
 
@@ -124,8 +134,12 @@ class TrackingNotifier extends Notifier<Activity> {
       return;
     }
 
+    final accuracy = position.accuracy.isFinite && position.accuracy >= 0
+        ? position.accuracy
+        : 100.0;
     debugPrint(
-      'STRIDE: GPS position ${position.latitude}, ${position.longitude}',
+      'STRIDE: GPS position ${position.latitude}, ${position.longitude} '
+      '(accuracy ${accuracy.toStringAsFixed(1)}m)',
     );
 
     final point = RoutePoint(
@@ -138,37 +152,114 @@ class TrackingNotifier extends Notifier<Activity> {
 
     final lastPoint = state.route.isEmpty ? null : state.route.last;
 
-    // Calculate the distance between the previous GPS point
-    // and the new GPS point.
-    final addedMeters = lastPoint == null
-        ? 0.0
-        : Geolocator.distanceBetween(
-            lastPoint.latitude,
-            lastPoint.longitude,
-            point.latitude,
-            point.longitude,
-          );
-
-    // Ignore obviously invalid GPS jumps.
-    //
-    // A single GPS glitch can otherwise add hundreds of meters
-    // or even kilometers to a run.
-    if (addedMeters > 200) {
-      debugPrint(
-        'STRIDE: Ignoring GPS jump of ${addedMeters.toStringAsFixed(1)}m',
-      );
-
-      state = state.copyWith(
-        route: [...state.route, point],
-      );
-
+    // The first usable fix establishes the route baseline. It contributes no
+    // distance, regardless of its reported accuracy.
+    if (lastPoint == null) {
+      state = state.copyWith(route: [point]);
       return;
     }
+
+    final addedMeters = Geolocator.distanceBetween(
+      lastPoint.latitude,
+      lastPoint.longitude,
+      point.latitude,
+      point.longitude,
+    );
+    final elapsedSeconds = point.timestamp
+        .difference(lastPoint.timestamp)
+        .inMilliseconds / 1000;
+    if (elapsedSeconds <= 0) {
+      debugPrint('STRIDE: Ignoring out-of-order GPS timestamp');
+      return;
+    }
+
+    final impliedSpeedMps = addedMeters / elapsedSeconds;
+    final minimumMovement = _minimumMovementMeters(accuracy);
+    final maximumSpeed = _maximumTrustedSpeedMps(accuracy);
+
+    // Accuracy is a confidence signal, not a hard acceptance rule. A poor
+    // fix may still be used for plausible movement, while an excellent fix
+    // is still rejected if it implies an impossible running speed.
+    if (impliedSpeedMps > maximumSpeed) {
+      debugPrint(
+        'STRIDE: Ignoring GPS jump of ${addedMeters.toStringAsFixed(1)}m '
+        'at ${impliedSpeedMps.toStringAsFixed(1)}m/s '
+        '(accuracy ${accuracy.toStringAsFixed(1)}m)',
+      );
+      return;
+    }
+
+    // Nearby fixes are usually stationary GPS wander. Retaining the previous
+    // trusted baseline lets real running movement accumulate naturally until
+    // it clears this small, accuracy-aware threshold.
+    if (addedMeters < minimumMovement) {
+      _clearStaleLivePace(point.timestamp);
+      return;
+    }
+
+    _recentSegments.add(_TrustedSegment(
+      endedAt: point.timestamp,
+      distanceMeters: addedMeters,
+      durationSeconds: elapsedSeconds,
+    ));
+    final currentPace = _calculateCurrentPace(point.timestamp);
 
     state = state.copyWith(
       route: [...state.route, point],
       distanceMeters: state.distanceMeters + addedMeters,
+      currentPaceMinPerKm: currentPace,
     );
+  }
+
+  /// Treat <=4m as excellent, while becoming progressively more cautious as
+  /// uncertainty rises. These are deliberately small enough for normal runs.
+  double _minimumMovementMeters(double accuracy) {
+    if (accuracy <= 4) return 2.5;
+    if (accuracy <= 10) return 3.5;
+    if (accuracy <= 20) return 5.0;
+    return 8.0;
+  }
+
+  /// Better fixes have a little more headroom for sprinting; poor fixes are
+  /// checked more conservatively for improbable displacement.
+  double _maximumTrustedSpeedMps(double accuracy) {
+    if (accuracy <= 4) return 9.0;
+    if (accuracy <= 10) return 8.5;
+    if (accuracy <= 20) return 7.5;
+    return 6.5;
+  }
+
+  double? _calculateCurrentPace(DateTime now) {
+    final cutoff = now.subtract(_paceWindow);
+    _recentSegments.removeWhere((segment) => segment.endedAt.isBefore(cutoff));
+    final recentDistance = _recentSegments.fold<double>(
+      0,
+      (total, segment) => total + segment.distanceMeters,
+    );
+    final recentSeconds = _recentSegments.fold<double>(
+      0,
+      (total, segment) => total + segment.durationSeconds,
+    );
+    if (recentDistance < _paceMinimumDistanceMeters ||
+        recentSeconds < _paceMinimumDurationSeconds) {
+      return state.currentPaceMinPerKm;
+    }
+
+    final rawPace = (recentSeconds / 60) / (recentDistance / 1000);
+    if (rawPace < 2.3 || rawPace > 20) return state.currentPaceMinPerKm;
+
+    final previous = state.currentPaceMinPerKm;
+    return previous == null ? rawPace : previous * 0.65 + rawPace * 0.35;
+  }
+
+  void _clearStaleLivePace(DateTime timestamp) {
+    final lastTrustedAt = _recentSegments.isEmpty
+        ? null
+        : _recentSegments.last.endedAt;
+    if (lastTrustedAt == null ||
+        timestamp.difference(lastTrustedAt) > const Duration(seconds: 15)) {
+      state = state.copyWith(clearCurrentPace: true);
+    }
   }
 
   /// Handles errors coming from the GPS stream.
@@ -244,5 +335,19 @@ class TrackingNotifier extends Notifier<Activity> {
 
     _ticker = null;
     _positionSub = null;
+    _resetGpsProcessing();
   }
+}
+
+/// A distance contribution that has passed GPS quality checks.
+class _TrustedSegment {
+  const _TrustedSegment({
+    required this.endedAt,
+    required this.distanceMeters,
+    required this.durationSeconds,
+  });
+
+  final DateTime endedAt;
+  final double distanceMeters;
+  final double durationSeconds;
 }
