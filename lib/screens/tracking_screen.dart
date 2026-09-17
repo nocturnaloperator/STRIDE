@@ -31,7 +31,9 @@ class _TrackingScreenState extends ConsumerState<TrackingScreen> {
 
     ref.listen<String?>(trackingErrorProvider, (previous, next) {
       if (next == null) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(next)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(next)),
+      );
       ref.read(trackingErrorProvider.notifier).state = null;
     });
 
@@ -41,10 +43,15 @@ class _TrackingScreenState extends ConsumerState<TrackingScreen> {
     // too would yank the map away from the user every second even while
     // they're trying to manually pan or zoom it.
     ref.listen<Activity>(trackingProvider, (previous, next) {
-      final gainedNewPoint = next.route.length != (previous?.route.length ?? 0);
+      final gainedNewPoint =
+          next.route.length != (previous?.route.length ?? 0);
+
       if (gainedNewPoint && next.route.isNotEmpty) {
         final last = next.route.last;
-        _mapController.move(LatLng(last.latitude, last.longitude), 17);
+        _mapController.move(
+          LatLng(last.latitude, last.longitude),
+          17,
+        );
       }
     });
 
@@ -66,7 +73,8 @@ class _TrackingScreenState extends ConsumerState<TrackingScreen> {
           builder: (context) => AlertDialog(
             title: const Text('Activity still recording'),
             content: const Text(
-              'Leaving now will discard this activity. Finish and save it first?',
+              'Leaving now will discard this activity. '
+              'Finish and save it first?',
             ),
             actions: [
               TextButton(
@@ -82,27 +90,40 @@ class _TrackingScreenState extends ConsumerState<TrackingScreen> {
         );
 
         if (shouldFinish == true) {
-          final completed = ref.read(trackingProvider.notifier).finish();
+          final completed =
+              ref.read(trackingProvider.notifier).finish();
+
           await ref
               .read(activityHistoryProvider.notifier)
               .addCompleted(completed);
-          if (context.mounted) Navigator.of(context).pop();
+
+          if (context.mounted) {
+            Navigator.of(context).pop();
+          }
         }
       },
       child: Scaffold(
         body: Stack(
           children: [
-            _RouteMap(activity: activity, controller: _mapController),
+            _RouteMap(
+              activity: activity,
+              controller: _mapController,
+            ),
             _StatsPanel(
               activity: activity,
               isExpanded: _statsExpanded,
-              onTap: () => setState(() => _statsExpanded = !_statsExpanded),
+              onTap: () => setState(
+                () => _statsExpanded = !_statsExpanded,
+              ),
             ),
             Positioned(
               left: 16,
               right: 16,
               bottom: 24,
-              child: SafeArea(top: false, child: _Controls(activity: activity)),
+              child: SafeArea(
+                top: false,
+                child: _Controls(activity: activity),
+              ),
             ),
           ],
         ),
@@ -112,7 +133,10 @@ class _TrackingScreenState extends ConsumerState<TrackingScreen> {
 }
 
 class _RouteMap extends StatelessWidget {
-  const _RouteMap({required this.activity, required this.controller});
+  const _RouteMap({
+    required this.activity,
+    required this.controller,
+  });
 
   final Activity activity;
   final MapController controller;
@@ -122,16 +146,21 @@ class _RouteMap extends StatelessWidget {
     final points = activity.route
         .map((p) => LatLng(p.latitude, p.longitude))
         .toList();
+
     final initialCenter = points.isNotEmpty
         ? points.last
         : const LatLng(12.9716, 77.5946);
 
     return FlutterMap(
       mapController: controller,
-      options: MapOptions(initialCenter: initialCenter, initialZoom: 17),
+      options: MapOptions(
+        initialCenter: initialCenter,
+        initialZoom: 17,
+      ),
       children: [
         TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          urlTemplate:
+              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.stride.app',
         ),
         if (points.length > 1)
@@ -169,8 +198,16 @@ class _CurrentPositionDot extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: Colors.deepOrange,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+        border: Border.all(
+          color: Colors.white,
+          width: 3,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 4,
+          ),
+        ],
       ),
     );
   }
@@ -192,8 +229,11 @@ class _StatsPanel extends StatelessWidget {
     final pace = activity.paceMinPerKm;
     final paceText = formatPace(pace);
 
-    final minutes = (activity.durationSeconds ~/ 60).toString().padLeft(2, '0');
-    final seconds = (activity.durationSeconds % 60).toString().padLeft(2, '0');
+    final minutes =
+        (activity.durationSeconds ~/ 60).toString().padLeft(2, '0');
+
+    final seconds =
+        (activity.durationSeconds % 60).toString().padLeft(2, '0');
 
     return SafeArea(
       child: LayoutBuilder(
@@ -215,16 +255,29 @@ class _StatsPanel extends StatelessWidget {
                   duration: const Duration(milliseconds: 240),
                   curve: Curves.easeOutCubic,
                   width: constraints.maxWidth - 32,
-                  height: isExpanded ? expandedHeight : null,
-                  margin: EdgeInsets.only(top: isExpanded ? 36 : 10),
+
+                  // FIX:
+                  // Both animation endpoints now have finite heights.
+                  // Previously the collapsed state used null (unbounded),
+                  // causing BoxConstraints.lerp() to throw.
+                  height: isExpanded ? expandedHeight : 82,
+
+                  margin: EdgeInsets.only(
+                    top: isExpanded ? 36 : 10,
+                  ),
                   padding: EdgeInsets.symmetric(
                     horizontal: isExpanded ? 24 : 12,
                     vertical: isExpanded ? 20 : 10,
                   ),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).scaffoldBackgroundColor
-                        .withValues(alpha: isExpanded ? 0.96 : 0.88),
-                    borderRadius: BorderRadius.circular(isExpanded ? 28 : 18),
+                    color: Theme.of(context)
+                        .scaffoldBackgroundColor
+                        .withValues(
+                          alpha: isExpanded ? 0.96 : 0.88,
+                        ),
+                    borderRadius: BorderRadius.circular(
+                      isExpanded ? 28 : 18,
+                    ),
                     boxShadow: const [
                       BoxShadow(
                         color: Colors.black26,
@@ -237,12 +290,14 @@ class _StatsPanel extends StatelessWidget {
                     duration: const Duration(milliseconds: 180),
                     child: isExpanded
                         ? _ExpandedStats(
-                            distance: activity.distanceKm.toStringAsFixed(2),
+                            distance:
+                                activity.distanceKm.toStringAsFixed(2),
                             duration: '$minutes:$seconds',
                             pace: paceText,
                           )
                         : _CompactStats(
-                            distance: activity.distanceKm.toStringAsFixed(2),
+                            distance:
+                                activity.distanceKm.toStringAsFixed(2),
                             duration: '$minutes:$seconds',
                             pace: paceText,
                           ),
@@ -274,13 +329,22 @@ class _CompactStats extends StatelessWidget {
       key: const ValueKey('compact-stats'),
       children: [
         Expanded(
-          child: _Stat(label: 'Distance', value: '$distance km'),
+          child: _Stat(
+            label: 'Distance',
+            value: '$distance km',
+          ),
         ),
         Expanded(
-          child: _Stat(label: 'Time', value: duration),
+          child: _Stat(
+            label: 'Time',
+            value: duration,
+          ),
         ),
         Expanded(
-          child: _Stat(label: 'Pace', value: '$pace /km'),
+          child: _Stat(
+            label: 'Pace',
+            value: '$pace /km',
+          ),
         ),
       ],
     );
@@ -304,9 +368,21 @@ class _ExpandedStats extends StatelessWidget {
       key: const ValueKey('expanded-stats'),
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _Stat(label: 'Distance', value: '$distance km', expanded: true),
-        _Stat(label: 'Duration', value: duration, expanded: true),
-        _Stat(label: 'Pace', value: '$pace /km', expanded: true),
+        _Stat(
+          label: 'Distance',
+          value: '$distance km',
+          expanded: true,
+        ),
+        _Stat(
+          label: 'Duration',
+          value: duration,
+          expanded: true,
+        ),
+        _Stat(
+          label: 'Pace',
+          value: '$pace /km',
+          expanded: true,
+        ),
         Text(
           'Tap anywhere to return to map',
           style: Theme.of(context).textTheme.bodySmall,
@@ -331,14 +407,17 @@ class _Stat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 2),
         Text(
           value,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.bold,
             fontSize: expanded ? 36 : 18,
-              ),
+          ),
         ),
       ],
     );
@@ -346,7 +425,10 @@ class _Stat extends StatelessWidget {
 }
 
 class _Controls extends ConsumerWidget {
-  const _Controls({required this.activity});
+  const _Controls({
+    required this.activity,
+  });
+
   final Activity activity;
 
   @override
@@ -354,35 +436,42 @@ class _Controls extends ConsumerWidget {
     final notifier = ref.read(trackingProvider.notifier);
 
     return switch (activity.status) {
-      ActivityStatus.idle || ActivityStatus.finished => _WideButton(
-        label: 'Start',
-        color: Colors.deepOrange,
-        onPressed: () => _handleStart(context, notifier),
-      ),
-      ActivityStatus.recording => _WideButton(
-        label: 'Pause',
-        color: Colors.grey.shade800,
-        onPressed: notifier.pause,
-      ),
-      ActivityStatus.paused => Row(
-        children: [
-          Expanded(
-            child: _WideButton(
-              label: 'Resume',
-              color: Colors.deepOrange,
-              onPressed: notifier.resume,
+      ActivityStatus.idle ||
+      ActivityStatus.finished =>
+        _WideButton(
+          label: 'Start',
+          color: Colors.deepOrange,
+          onPressed: () => _handleStart(context, notifier),
+        ),
+
+      ActivityStatus.recording =>
+        _WideButton(
+          label: 'Pause',
+          color: Colors.grey.shade800,
+          onPressed: notifier.pause,
+        ),
+
+      ActivityStatus.paused =>
+        Row(
+          children: [
+            Expanded(
+              child: _WideButton(
+                label: 'Resume',
+                color: Colors.deepOrange,
+                onPressed: notifier.resume,
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _WideButton(
-              label: 'Finish',
-              color: Colors.red.shade700,
-              onPressed: () => _confirmFinish(context, ref, notifier),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _WideButton(
+                label: 'Finish',
+                color: Colors.red.shade700,
+                onPressed: () =>
+                    _confirmFinish(context, ref, notifier),
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
     };
   }
 
@@ -394,8 +483,9 @@ class _Controls extends ConsumerWidget {
       await notifier.start();
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
       }
     }
   }
@@ -409,7 +499,9 @@ class _Controls extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Finish activity?'),
-        content: const Text('This will end and save your current run.'),
+        content: const Text(
+          'This will end and save your current run.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -425,8 +517,14 @@ class _Controls extends ConsumerWidget {
 
     if (confirmed == true) {
       final completed = notifier.finish();
-      await ref.read(activityHistoryProvider.notifier).addCompleted(completed);
-      if (context.mounted) Navigator.of(context).maybePop();
+
+      await ref
+          .read(activityHistoryProvider.notifier)
+          .addCompleted(completed);
+
+      if (context.mounted) {
+        Navigator.of(context).maybePop();
+      }
     }
   }
 }
@@ -447,9 +545,14 @@ class _WideButton extends StatelessWidget {
     return SizedBox(
       height: 56,
       child: FilledButton(
-        style: FilledButton.styleFrom(backgroundColor: color),
+        style: FilledButton.styleFrom(
+          backgroundColor: color,
+        ),
         onPressed: onPressed,
-        child: Text(label, style: const TextStyle(fontSize: 16)),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 16),
+        ),
       ),
     );
   }
