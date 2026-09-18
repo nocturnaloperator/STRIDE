@@ -702,3 +702,4 @@ class MockAITrainingPlanService implements AITrainingPlanService {
   }
 }
 
+
