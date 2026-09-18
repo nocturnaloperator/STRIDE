@@ -256,7 +256,7 @@ class _PlanBuilder extends StatelessWidget {
 
         TextField(
           controller: targetTimeController,
-          keyboardType: TextInputType.datetime,
+          keyboardType: TextInputType.text,
           decoration: const InputDecoration(
             border: OutlineInputBorder(),
             hintText: 'e.g. 00:25 for 5K',
