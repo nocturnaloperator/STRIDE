@@ -48,7 +48,7 @@ class MockAITrainingPlanService implements AITrainingPlanService {
       workouts: workouts,
       goal: request.goal,
       raceDate: request.raceDate,
-      targetTimeMinutes: request.targetTimeMinutes,
+      targetTimeSeconds: request.targetTimeSeconds,
       createdAt: DateTime.now(),
       currentWeeklyMileageKm:
           request.currentWeeklyMileageKm,
@@ -347,10 +347,10 @@ class MockAITrainingPlanService implements AITrainingPlanService {
   double? _estimatedRacePace(
     TrainingPlanRequest request,
   ) {
-    final targetTime = request.targetTimeMinutes;
+    final targetTime = request.targetTimeSeconds;
 
     if (targetTime != null && targetTime > 0) {
-      return targetTime / 5.0;
+      return targetTime / 60.0 / _goalDistanceKm(request.goal);
     }
 
     final recentPace =
@@ -630,7 +630,7 @@ class MockAITrainingPlanService implements AITrainingPlanService {
     TrainingPlanRequest request,
   ) {
     final targetTime =
-        request.targetTimeMinutes;
+        request.targetTimeSeconds;
 
     if (targetTime != null &&
         targetTime > 0) {
@@ -701,3 +701,4 @@ class MockAITrainingPlanService implements AITrainingPlanService {
     }
   }
 }
+
