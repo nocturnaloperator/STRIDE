@@ -103,9 +103,9 @@ class _ProfileBody extends ConsumerWidget {
                       ),
                     ),
                     error: (error, stackTrace) =>
-                        SliverToBoxAdapter(
+                        const SliverToBoxAdapter(
                       child: Padding(
-                        padding: const EdgeInsets.all(24),
+                        padding: EdgeInsets.all(24),
                         child: Text(
                           'Could not load activities.',
                           textAlign: TextAlign.center,
@@ -273,9 +273,9 @@ class _ProfileHeader extends StatelessWidget {
               ? CachedNetworkImage(
                   imageUrl: profile.coverPhotoUrl!,
                   fit: BoxFit.cover,
-                  placeholder: (_, __) =>
+                  placeholder: (_, _) =>
                       Container(color: Colors.grey.shade300),
-                  errorWidget: (_, __, ___) =>
+                  errorWidget: (_, _, _) =>
                       Container(color: Colors.grey.shade400),
                 )
               : Container(
@@ -531,7 +531,7 @@ class _AchievementBadge extends StatelessWidget {
 }
 
 class _PhotoTile extends StatelessWidget {
-  const _PhotoTile({super.key});
+  const _PhotoTile();
 
   @override
   Widget build(BuildContext context) {

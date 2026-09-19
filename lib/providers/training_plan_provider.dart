@@ -1,11 +1,20 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/training_plan_repository.dart';
+import '../models/runner_fitness_summary.dart';
 import '../models/training_plan.dart';
+import '../models/training_plan_request.dart';
+import '../services/ai_training_plan_service.dart';
+import 'activity_history_provider.dart';
 
 final trainingPlanRepositoryProvider =
     Provider<TrainingPlanRepository>((ref) {
   return InMemoryTrainingPlanRepository();
+});
+
+final aiTrainingPlanServiceProvider =
+    Provider<AITrainingPlanService>((ref) {
+  return const MockAITrainingPlanService();
 });
 
 final trainingPlanProvider =
@@ -19,6 +28,56 @@ class TrainingPlanNotifier extends AsyncNotifier<TrainingPlan?> {
     return ref
         .read(trainingPlanRepositoryProvider)
         .fetchActivePlan();
+  }
+
+  /// Generates a training plan from the user's goal and
+  /// their recent Stride activity history.
+  Future<void> generatePlan({
+    required TrainingGoal goal,
+    required DateTime raceDate,
+    required int trainingDaysPerWeek,
+    int? targetTimeSeconds,
+  }) async {
+    state = const AsyncLoading();
+
+    try {
+      // Get the runner's real completed activities.
+      final activities =
+          await ref.read(activityHistoryProvider.future);
+
+      // Convert raw activities into a compact fitness summary.
+      final fitnessSummary =
+          RunnerFitnessSummary.fromActivities(activities);
+
+      // Build the information that the coach needs.
+      final request = TrainingPlanRequest(
+        goal: goal,
+        raceDate: raceDate,
+        trainingDaysPerWeek: trainingDaysPerWeek,
+        targetTimeSeconds: targetTimeSeconds,
+        currentWeeklyMileageKm:
+            fitnessSummary.recentWeeklyMileageKm,
+        currentLongestRunKm:
+            fitnessSummary.longestRunKm,
+        fitnessSummary: fitnessSummary,
+      );
+
+      // Ask the configured coach service to generate the plan.
+      final service =
+          ref.read(aiTrainingPlanServiceProvider);
+
+      final generatedPlan =
+          await service.generatePlan(request);
+
+      // Save the generated plan using the repository.
+      await ref
+          .read(trainingPlanRepositoryProvider)
+          .savePlan(generatedPlan);
+
+      state = AsyncData(generatedPlan);
+    } catch (error, stackTrace) {
+      state = AsyncError(error, stackTrace);
+    }
   }
 
   Future<void> setPlan(TrainingPlan plan) async {
@@ -64,7 +123,7 @@ class TrainingPlanNotifier extends AsyncNotifier<TrainingPlan?> {
       workouts: updatedWorkouts,
       goal: plan.goal,
       raceDate: plan.raceDate,
-      targetTimeMinutes: plan.targetTimeMinutes,
+      targetTimeSeconds: plan.targetTimeSeconds,
       createdAt: plan.createdAt,
       currentWeeklyMileageKm:
           plan.currentWeeklyMileageKm,

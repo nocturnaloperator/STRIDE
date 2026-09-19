@@ -1,13 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-enum WorkoutType {
-  rest,
-  easyRun,
-  longRun,
-  tempo,
-  intervals,
-  crossTrain,
-}
+enum WorkoutType { rest, easyRun, longRun, tempo, intervals, crossTrain, race }
 
 @immutable
 class PlannedWorkout {
@@ -43,10 +36,8 @@ class PlannedWorkout {
       id: id,
       scheduledDate: scheduledDate ?? this.scheduledDate,
       type: type ?? this.type,
-      targetDistanceKm:
-          targetDistanceKm ?? this.targetDistanceKm,
-      targetPaceMinPerKm:
-          targetPaceMinPerKm ?? this.targetPaceMinPerKm,
+      targetDistanceKm: targetDistanceKm ?? this.targetDistanceKm,
+      targetPaceMinPerKm: targetPaceMinPerKm ?? this.targetPaceMinPerKm,
       description: description ?? this.description,
       completed: completed ?? this.completed,
     );
@@ -75,7 +66,7 @@ class TrainingPlan {
     required this.workouts,
     this.goal,
     this.raceDate,
-    this.targetTimeMinutes,
+    this.targetTimeSeconds,
     this.createdAt,
     this.currentWeeklyMileageKm,
     this.currentLongestRunKm,
@@ -87,14 +78,21 @@ class TrainingPlan {
   final double goalDistanceKm;
   final List<PlannedWorkout> workouts;
 
-  // AI roadmap fields.
   final TrainingGoal? goal;
   final DateTime? raceDate;
-  final int? targetTimeMinutes;
+
+  /// Optional race target duration stored as total seconds.
+  ///
+  /// Examples:
+  /// 25:00 -> 1500 seconds
+  /// 50:00 -> 3000 seconds
+  /// 1:45:00 -> 6300 seconds
+  /// 3:45:00 -> 13500 seconds
+  final int? targetTimeSeconds;
+
   final DateTime? createdAt;
   final double? currentWeeklyMileageKm;
   final double? currentLongestRunKm;
-
   final List<TrainingWeek> weeks;
 
   double get progress {
@@ -102,8 +100,7 @@ class TrainingPlan {
       return 0;
     }
 
-    final completed =
-        workouts.where((workout) => workout.completed).length;
+    final completed = workouts.where((workout) => workout.completed).length;
 
     return completed / workouts.length;
   }
@@ -114,7 +111,7 @@ class TrainingPlan {
     List<PlannedWorkout>? workouts,
     TrainingGoal? goal,
     DateTime? raceDate,
-    int? targetTimeMinutes,
+    int? targetTimeSeconds,
     DateTime? createdAt,
     double? currentWeeklyMileageKm,
     double? currentLongestRunKm,
@@ -123,26 +120,18 @@ class TrainingPlan {
     return TrainingPlan(
       id: id,
       name: name ?? this.name,
-      goalDistanceKm:
-          goalDistanceKm ?? this.goalDistanceKm,
+      goalDistanceKm: goalDistanceKm ?? this.goalDistanceKm,
       workouts: workouts ?? this.workouts,
       goal: goal ?? this.goal,
       raceDate: raceDate ?? this.raceDate,
-      targetTimeMinutes:
-          targetTimeMinutes ?? this.targetTimeMinutes,
+      targetTimeSeconds: targetTimeSeconds ?? this.targetTimeSeconds,
       createdAt: createdAt ?? this.createdAt,
       currentWeeklyMileageKm:
           currentWeeklyMileageKm ?? this.currentWeeklyMileageKm,
-      currentLongestRunKm:
-          currentLongestRunKm ?? this.currentLongestRunKm,
+      currentLongestRunKm: currentLongestRunKm ?? this.currentLongestRunKm,
       weeks: weeks ?? this.weeks,
     );
   }
 }
 
-enum TrainingGoal {
-  fiveK,
-  tenK,
-  halfMarathon,
-  marathon,
-}
+enum TrainingGoal { fiveK, tenK, halfMarathon, marathon }

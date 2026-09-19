@@ -7,7 +7,7 @@ class TrainingPlanRequest {
     required this.goal,
     required this.raceDate,
     required this.trainingDaysPerWeek,
-    this.targetTimeMinutes,
+    this.targetTimeSeconds,
     this.currentWeeklyMileageKm,
     this.currentLongestRunKm,
     this.fitnessSummary,
@@ -16,7 +16,9 @@ class TrainingPlanRequest {
   final TrainingGoal goal;
   final DateTime raceDate;
   final int trainingDaysPerWeek;
-  final int? targetTimeMinutes;
+
+  /// Optional race target duration, stored as total seconds.
+  final int? targetTimeSeconds;
 
   final double? currentWeeklyMileageKm;
   final double? currentLongestRunKm;

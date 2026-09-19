@@ -2,704 +2,414 @@ import '../models/training_plan.dart';
 import '../models/training_plan_request.dart';
 
 abstract class AITrainingPlanService {
-  Future<TrainingPlan> generatePlan(
-    TrainingPlanRequest request,
-  );
+  Future<TrainingPlan> generatePlan(TrainingPlanRequest request);
 }
 
+/// Deterministic, periodized coaching engine. A remote coach can later replace
+/// this implementation without changing the request, model, provider, or UI.
 class MockAITrainingPlanService implements AITrainingPlanService {
   const MockAITrainingPlanService();
 
   @override
-  Future<TrainingPlan> generatePlan(
-    TrainingPlanRequest request,
-  ) async {
-    final goalDistance = _goalDistanceKm(request.goal);
-    final totalWeeks = _weeksUntilRace(request.raceDate);
-
+  Future<TrainingPlan> generatePlan(TrainingPlanRequest request) async {
+    final raceDate = _day(request.raceDate);
+    final goalKm = _goalKm(request.goal);
+    final totalWeeks = _weeksToRace(raceDate);
+    final profile = _Profile(request, goalKm);
+    final racePace = _racePace(request, goalKm);
     final weeks = <TrainingWeek>[];
 
-    for (var week = 1; week <= totalWeeks; week++) {
+    for (var index = 0; index < totalWeeks; index++) {
+      final phase = _phase(index, totalWeeks);
+      final workouts = phase == _Phase.race
+          ? _raceWeek(request, raceDate, racePace, profile)
+          : _trainingWeek(
+              request,
+              raceDate,
+              index,
+              totalWeeks,
+              phase,
+              profile,
+              racePace,
+            );
+      workouts.sort((a, b) => a.scheduledDate.compareTo(b.scheduledDate));
       weeks.add(
         TrainingWeek(
-          weekNumber: week,
-          focus: _weekFocus(
-            request.goal,
-            week,
-            totalWeeks,
-          ),
-          workouts: _createWeekWorkouts(
-            request,
-            week,
-            totalWeeks,
-          ),
+          weekNumber: index + 1,
+          focus: '${_goalLabel(request.goal)} ${_phaseLabel(phase)}',
+          workouts: workouts,
         ),
       );
     }
-
-    final workouts = weeks
-        .expand((week) => week.workouts)
-        .toList();
-
+    final workouts = weeks.expand((week) => week.workouts).toList()
+      ..sort((a, b) => a.scheduledDate.compareTo(b.scheduledDate));
     return TrainingPlan(
-      id: 'ai-plan-${DateTime.now().millisecondsSinceEpoch}',
-      name: _planName(request.goal),
-      goalDistanceKm: goalDistance,
+      id: 'ai-plan-${raceDate.millisecondsSinceEpoch}-${request.goal.name}',
+      name: '${_goalLabel(request.goal)} Training Plan',
+      goalDistanceKm: goalKm,
       workouts: workouts,
       goal: request.goal,
-      raceDate: request.raceDate,
+      raceDate: raceDate,
       targetTimeSeconds: request.targetTimeSeconds,
       createdAt: DateTime.now(),
-      currentWeeklyMileageKm:
-          request.currentWeeklyMileageKm,
-      currentLongestRunKm:
-          request.currentLongestRunKm,
+      currentWeeklyMileageKm: profile.weekly,
+      currentLongestRunKm: profile.longest,
       weeks: weeks,
     );
   }
 
-  List<PlannedWorkout> _createWeekWorkouts(
+  List<PlannedWorkout> _trainingWeek(
     TrainingPlanRequest request,
-    int week,
+    DateTime raceDate,
+    int index,
     int totalWeeks,
+    _Phase phase,
+    _Profile profile,
+    double? racePace,
   ) {
-    if (request.goal == TrainingGoal.fiveK) {
-      return _create5KWeek(
-        request,
-        week,
-        totalWeeks,
-      );
-    }
-
-    return _createDistanceRaceWeek(
-      request,
-      week,
-      totalWeeks,
-    );
-  }
-
-  // ------------------------------------------------------------
-  // 5K TRAINING
-  // ------------------------------------------------------------
-
-  List<PlannedWorkout> _create5KWeek(
-    TrainingPlanRequest request,
-    int week,
-    int totalWeeks,
-  ) {
-    final raceWeek = week == totalWeeks;
-
-    if (raceWeek) {
-      return [
-        _createWorkout(
-          id: 'w$week-easy',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            2,
-          ),
-          type: WorkoutType.easyRun,
-          distanceKm: 3.0,
-          description:
-              'Easy shakeout run. Keep the effort relaxed.',
-        ),
-        _createWorkout(
-          id: 'w$week-race',
-          date: request.raceDate,
-          type: WorkoutType.longRun,
-          distanceKm: 5.0,
-          description:
-              '5K race day. Start controlled and build effort gradually.',
-        ),
-      ];
-    }
-
-    final longestRecent =
-        request.currentLongestRunKm ?? 5.0;
-
-    final easyDistance =
-        _fiveKEasyDistance(longestRecent);
-
-    final longRunDistance =
-        _fiveKLongRunDistance(
-      longestRecent,
-      week,
-      totalWeeks,
-    );
-
+    final number = index + 1;
+    final start = _weekStart(raceDate, index, totalWeeks);
+    final recovery = phase == _Phase.recovery;
+    final multiplier = recovery ? .78 : 1.0;
+    final easyPace = _pace(racePace, 1.22);
+    final easyDistance = _easyDistance(request.goal, profile) * multiplier;
     final workouts = <PlannedWorkout>[
-      _createWorkout(
-        id: 'w$week-easy',
-        date: _dateForWeek(
-          request.raceDate,
-          week,
-          1,
-        ),
-        type: WorkoutType.easyRun,
-        distanceKm: easyDistance,
-        description:
-            'Easy aerobic run. Conversational effort.',
+      _workout(
+        'w$number-easy',
+        start,
+        WorkoutType.easyRun,
+        easyDistance,
+        easyPace,
+        'Easy aerobic run at conversational effort. Build durability without accumulating fatigue.',
       ),
     ];
-
     if (request.trainingDaysPerWeek >= 3) {
+      final intervals =
+          phase == _Phase.base ||
+          phase == _Phase.specific ||
+          (request.goal == TrainingGoal.fiveK && phase == _Phase.peak);
       workouts.add(
-        _createWorkout(
-          id: 'w$week-speed',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            3,
-          ),
-          type: WorkoutType.intervals,
-          distanceKm: _fiveKIntervalSessionDistance(
-            week,
-            totalWeeks,
-          ),
-          targetPaceMinPerKm:
-              _fiveKIntervalPace(request),
-          description:
-              _fiveKIntervalDescription(
-            week,
-            totalWeeks,
-          ),
-        ),
+        intervals
+            ? _workout(
+                'w$number-intervals',
+                start.add(const Duration(days: 2)),
+                WorkoutType.intervals,
+                _qualityDistance(request.goal) * multiplier,
+                _intervalPace(request.goal, racePace),
+                _intervalDescription(request.goal, phase),
+              )
+            : _tempo(
+                request,
+                number,
+                start.add(const Duration(days: 2)),
+                racePace,
+                multiplier,
+              ),
       );
     }
-
     if (request.trainingDaysPerWeek >= 4) {
       workouts.add(
-        _createWorkout(
-          id: 'w$week-tempo',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            5,
-          ),
-          type: WorkoutType.tempo,
-          distanceKm:
-              _fiveKTempoDistance(
-            week,
-            totalWeeks,
-          ),
-          targetPaceMinPerKm:
-              _fiveKTempoPace(request),
-          description:
-              'Controlled threshold effort. '
-              'Hard but sustainable; do not race the workout.',
+        _workout(
+          'w$number-easy-2',
+          start.add(const Duration(days: 4)),
+          WorkoutType.easyRun,
+          easyDistance * .8,
+          easyPace,
+          'Short easy run for aerobic volume and recovery.',
         ),
       );
     }
-
-    if (request.trainingDaysPerWeek >= 3) {
-      workouts.add(
-        _createWorkout(
-          id: 'w$week-long',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            6,
-          ),
-          type: WorkoutType.longRun,
-          distanceKm: longRunDistance,
-          description:
-              'Easy longer aerobic run. '
-              'Keep the effort controlled.',
-        ),
-      );
-    }
-
+    workouts.add(
+      _workout(
+        'w$number-long',
+        start.add(const Duration(days: 5)),
+        WorkoutType.longRun,
+        _longRun(request.goal, profile, index, totalWeeks, phase),
+        easyPace,
+        _longRunDescription(request.goal, phase),
+      ),
+    );
     return workouts;
   }
 
-  double _fiveKEasyDistance(
-    double longestRecent,
-  ) {
-    final distance = longestRecent * 0.55;
-
-    if (distance < 3.0) {
-      return 3.0;
-    }
-
-    if (distance > 7.0) {
-      return 7.0;
-    }
-
-    return distance;
-  }
-
-  double _fiveKLongRunDistance(
-    double longestRecent,
-    int week,
-    int totalWeeks,
-  ) {
-    final startingDistance =
-        longestRecent.clamp(4.0, 8.0);
-
-    const peakDistance = 8.0;
-
-    final progress =
-        totalWeeks <= 1
-            ? 1.0
-            : (week - 1) / (totalWeeks - 1);
-
-    final distance =
-        startingDistance +
-        (peakDistance - startingDistance) *
-            progress;
-
-    return distance.clamp(5.0, 8.0);
-  }
-
-  double _fiveKIntervalSessionDistance(
-    int week,
-    int totalWeeks,
-  ) {
-    final progress =
-        totalWeeks <= 1
-            ? 1.0
-            : (week - 1) / (totalWeeks - 1);
-
-    if (progress < 0.35) {
-      return 4.5;
-    }
-
-    if (progress < 0.70) {
-      return 5.0;
-    }
-
-    return 5.5;
-  }
-
-  String _fiveKIntervalDescription(
-    int week,
-    int totalWeeks,
-  ) {
-    final progress =
-        totalWeeks <= 1
-            ? 1.0
-            : (week - 1) / (totalWeeks - 1);
-
-    if (progress < 0.35) {
-      return 'Speed introduction: '
-          '6 × 1 minute hard with 2 minutes easy recovery. '
-          'Include warm-up and cooldown.';
-    }
-
-    if (progress < 0.70) {
-      return '5K-specific intervals: '
-          '5 × 800 m at controlled 5K effort '
-          'with easy recovery between repetitions. '
-          'Include warm-up and cooldown.';
-    }
-
-    return '5K sharpening: '
-        '6 × 400 m around 5K effort with easy recovery. '
-        'Stay fast and controlled rather than sprinting.';
-  }
-
-  double? _fiveKIntervalPace(
+  List<PlannedWorkout> _raceWeek(
     TrainingPlanRequest request,
+    DateTime raceDate,
+    double? racePace,
+    _Profile profile,
   ) {
-    final racePace =
-        _estimatedRacePace(request);
-
-    if (racePace == null) {
-      return null;
-    }
-
-    return racePace * 0.96;
-  }
-
-  double _fiveKTempoDistance(
-    int week,
-    int totalWeeks,
-  ) {
-    final progress =
-        totalWeeks <= 1
-            ? 1.0
-            : (week - 1) / (totalWeeks - 1);
-
-    if (progress < 0.35) {
-      return 3.0;
-    }
-
-    if (progress < 0.70) {
-      return 4.0;
-    }
-
-    return 4.5;
-  }
-
-  double? _fiveKTempoPace(
-    TrainingPlanRequest request,
-  ) {
-    final racePace =
-        _estimatedRacePace(request);
-
-    if (racePace == null) {
-      return null;
-    }
-
-    return racePace * 1.08;
-  }
-
-  double? _estimatedRacePace(
-    TrainingPlanRequest request,
-  ) {
-    final targetTime = request.targetTimeSeconds;
-
-    if (targetTime != null && targetTime > 0) {
-      return targetTime / 60.0 / _goalDistanceKm(request.goal);
-    }
-
-    final recentPace =
-        request.fitnessSummary?.averagePaceMinPerKm;
-
-    if (recentPace == null || recentPace <= 0) {
-      return null;
-    }
-
-    return recentPace;
-  }
-
-  // ------------------------------------------------------------
-  // 10K / HALF / MARATHON FOUNDATION
-  // ------------------------------------------------------------
-
-  List<PlannedWorkout> _createDistanceRaceWeek(
-    TrainingPlanRequest request,
-    int week,
-    int totalWeeks,
-  ) {
-    final raceWeek = week == totalWeeks;
-
-    if (raceWeek) {
-      return [
-        _createWorkout(
-          id: 'w$week-easy',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            3,
-          ),
-          type: WorkoutType.easyRun,
-          distanceKm: 4.0,
-          description:
-              'Easy shakeout run.',
-        ),
-        _createWorkout(
-          id: 'w$week-race',
-          date: request.raceDate,
-          type: WorkoutType.longRun,
-          distanceKm:
-              _goalDistanceKm(request.goal),
-          description:
-              'Race day.',
-        ),
-      ];
-    }
-
-    final longestRecent =
-        request.currentLongestRunKm ?? 5.0;
-
-    final longRunDistance =
-        _longRunDistance(
-      request.goal,
-      longestRecent,
-      week,
-      totalWeeks,
-    );
-
-    final easyDistance =
-        _easyRunDistance(
-      request.goal,
-      longestRecent,
-    );
-
+    final week = _weeksToRace(raceDate);
     final workouts = <PlannedWorkout>[
-      _createWorkout(
-        id: 'w$week-easy',
-        date: _dateForWeek(
-          request.raceDate,
-          week,
-          1,
+      _workout(
+        'w$week-easy',
+        raceDate.subtract(const Duration(days: 4)),
+        WorkoutType.easyRun,
+        _easyDistance(request.goal, profile) * .55,
+        _pace(racePace, 1.22),
+        'Easy taper run. Finish fresh; this is not a fitness test.',
+      ),
+      if (request.trainingDaysPerWeek >= 3)
+        _workout(
+          'w$week-sharpen',
+          raceDate.subtract(const Duration(days: 2)),
+          WorkoutType.intervals,
+          _taperDistance(request.goal),
+          _intervalPace(request.goal, racePace),
+          'Brief race-week sharpening with full recovery. Stay controlled and finish fresh.',
         ),
-        type: WorkoutType.easyRun,
-        distanceKm: easyDistance,
-        description:
-            'Easy aerobic run at a comfortable effort.',
+      _workout(
+        'w$week-race',
+        raceDate,
+        WorkoutType.race,
+        _goalKm(request.goal),
+        racePace,
+        'Race day. Start within your planned effort, fuel as practised, and let the race be the week\'s key workout.',
       ),
     ];
-
-    if (request.trainingDaysPerWeek >= 3) {
-      workouts.add(
-        _createWorkout(
-          id: 'w$week-quality',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            3,
-          ),
-          type: WorkoutType.tempo,
-          distanceKm:
-              _tempoDistance(request.goal),
-          targetPaceMinPerKm:
-              _targetTempoPace(request),
-          description:
-              'Controlled tempo workout. '
-              'Finish strong without racing.',
-        ),
-      );
-    }
-
-    if (request.trainingDaysPerWeek >= 4) {
-      workouts.add(
-        _createWorkout(
-          id: 'w$week-long',
-          date: _dateForWeek(
-            request.raceDate,
-            week,
-            6,
-          ),
-          type: WorkoutType.longRun,
-          distanceKm: longRunDistance,
-          description:
-              'Long aerobic run. Keep the effort controlled.',
-        ),
-      );
-    }
-
     return workouts;
   }
 
-  // ------------------------------------------------------------
-  // COMMON HELPERS
-  // ------------------------------------------------------------
+  PlannedWorkout _tempo(
+    TrainingPlanRequest request,
+    int week,
+    DateTime date,
+    double? racePace,
+    double multiplier,
+  ) {
+    return _workout(
+      'w$week-tempo',
+      date,
+      WorkoutType.tempo,
+      _tempoDistance(request.goal) * multiplier,
+      _tempoPace(request.goal, racePace),
+      _tempoDescription(request.goal),
+    );
+  }
 
-  PlannedWorkout _createWorkout({
-    required String id,
-    required DateTime date,
-    required WorkoutType type,
-    double? distanceKm,
-    double? targetPaceMinPerKm,
-    String? description,
-  }) {
+  PlannedWorkout _workout(
+    String id,
+    DateTime date,
+    WorkoutType type,
+    double distance,
+    double? pace,
+    String description,
+  ) {
     return PlannedWorkout(
       id: id,
-      scheduledDate: date,
+      scheduledDate: _day(date),
       type: type,
-      targetDistanceKm: distanceKm,
-      targetPaceMinPerKm: targetPaceMinPerKm,
+      targetDistanceKm: (distance * 10).round() / 10,
+      targetPaceMinPerKm: _validPace(pace) ? pace : null,
       description: description,
     );
   }
 
-  DateTime _dateForWeek(
-    DateTime raceDate,
-    int week,
-    int weekday,
-  ) {
-    final raceMonday = raceDate.subtract(
-      Duration(days: raceDate.weekday - 1),
-    );
-
-    final date = raceMonday
-        .subtract(
-          Duration(days: (week - 1) * 7),
-        )
-        .add(
-          Duration(days: weekday - 1),
-        );
-
-    return DateTime(
-      date.year,
-      date.month,
-      date.day,
-    );
-  }
-
-  int _weeksUntilRace(DateTime raceDate) {
-    final now = DateTime.now();
-    final days = raceDate.difference(now).inDays;
-
-    final weeks = (days / 7).ceil();
-
-    if (weeks < 1) {
-      return 1;
-    }
-
-    if (weeks > 16) {
-      return 16;
-    }
-
-    return weeks;
-  }
-
-  double _goalDistanceKm(TrainingGoal goal) {
-    switch (goal) {
-      case TrainingGoal.fiveK:
-        return 5.0;
-      case TrainingGoal.tenK:
-        return 10.0;
-      case TrainingGoal.halfMarathon:
-        return 21.1;
-      case TrainingGoal.marathon:
-        return 42.2;
-    }
-  }
-
-  double _easyRunDistance(
+  double _longRun(
     TrainingGoal goal,
-    double longestRecent,
+    _Profile p,
+    int index,
+    int total,
+    _Phase phase,
   ) {
-    final base =
-        longestRecent > 0
-            ? longestRecent * 0.55
-            : 5.0;
+    final buildWeeks = total > 2 ? total - 2 : 0;
+    final start = p.longest > 0 ? p.longest : _startLongRun(goal, p.weekly);
+    final desiredPeak = switch (goal) {
+      TrainingGoal.fiveK => 10.0,
+      TrainingGoal.tenK => 16.0,
+      TrainingGoal.halfMarathon => 28.0,
+      TrainingGoal.marathon => 32.0,
+    };
+    final weeklyStep = switch (goal) {
+      TrainingGoal.fiveK => .75,
+      TrainingGoal.tenK => 1.0,
+      TrainingGoal.halfMarathon => 1.5,
+      TrainingGoal.marathon => 2.0,
+    };
+    final safePeak = start + buildWeeks * weeklyStep + start * buildWeeks * .04;
+    // Do not assume that weekly mileage can rise without limit simply because
+    // the calendar allows it; sparse history remains a conservative case.
+    final experiencePeak =
+        p.weekly > 0 ? p.weekly * .75 + buildWeeks : start + buildWeeks;
+    final peak = [desiredPeak, safePeak, experiencePeak]
+        .reduce((lowest, value) => lowest < value ? lowest : value);
+    final progress = buildWeeks == 0
+        ? 0.0
+        : index.clamp(0, buildWeeks).toDouble() / buildWeeks;
+    var distance = start + (peak - start) * progress;
+    if (phase == _Phase.recovery) distance *= .78;
+    if (phase == _Phase.taper) distance *= .58;
+    return distance;
+  }
 
+  double _startLongRun(TrainingGoal goal, double weekly) {
+    final minimum = switch (goal) {
+      TrainingGoal.fiveK => 4.0,
+      TrainingGoal.tenK => 5.0,
+      TrainingGoal.halfMarathon => 7.0,
+      TrainingGoal.marathon => 8.0,
+    };
+    return weekly * .3 > minimum ? weekly * .3 : minimum;
+  }
+
+  _Phase _phase(int index, int total) {
+    if (index == total - 1) return _Phase.race;
+    if (index == total - 2) return _Phase.taper;
+    if (total >= 6 && (index + 1) % 4 == 0) return _Phase.recovery;
+    final progress = index / (total - 2).clamp(1, total);
+    if (progress < .30) return _Phase.base;
+    if (progress < .60) return _Phase.build;
+    if (progress < .85) return _Phase.specific;
+    return _Phase.peak;
+  }
+
+  double? _racePace(TrainingPlanRequest request, double distance) {
+    if (request.targetTimeSeconds != null) {
+      // Seconds -> minutes -> minutes per kilometre. This is the unit boundary.
+      final pace = request.targetTimeSeconds! / 60.0 / distance;
+      if (_validPace(pace)) return pace;
+      throw ArgumentError.value(
+        request.targetTimeSeconds,
+        'targetTimeSeconds',
+        'does not produce a realistic running pace for the chosen distance',
+      );
+    }
+    final recent = request.fitnessSummary?.averagePaceMinPerKm;
+    return _validPace(recent) ? recent : null;
+  }
+
+  bool _validPace(double? pace) =>
+      pace != null && pace.isFinite && pace >= 2.3 && pace <= 15.0;
+  double? _pace(double? base, double factor) =>
+      base == null ? null : base * factor;
+  double? _intervalPace(TrainingGoal goal, double? pace) =>
+      _pace(pace, switch (goal) {
+        TrainingGoal.fiveK => .96,
+        TrainingGoal.tenK => .98,
+        TrainingGoal.halfMarathon => .99,
+        TrainingGoal.marathon => .98,
+      });
+  double? _tempoPace(TrainingGoal goal, double? pace) =>
+      _pace(pace, switch (goal) {
+        TrainingGoal.fiveK => 1.08,
+        TrainingGoal.tenK => 1.05,
+        TrainingGoal.halfMarathon => 1.02,
+        TrainingGoal.marathon => .94,
+      });
+
+  int _weeksToRace(DateTime raceDate) =>
+      (raceDate.difference(_day(DateTime.now())).inDays / 7)
+          .ceil()
+          .clamp(1, 16)
+          .toInt();
+  DateTime _weekStart(DateTime race, int index, int total) {
+    final monday = race.subtract(Duration(days: race.weekday - 1));
+    return _day(monday.subtract(Duration(days: (total - 1 - index) * 7)));
+  }
+
+  DateTime _day(DateTime date) => DateTime(date.year, date.month, date.day);
+  double _goalKm(TrainingGoal goal) => switch (goal) {
+    TrainingGoal.fiveK => 5,
+    TrainingGoal.tenK => 10,
+    TrainingGoal.halfMarathon => 21.1,
+    TrainingGoal.marathon => 42.2,
+  };
+  double _easyDistance(TrainingGoal goal, _Profile p) {
     final minimum = switch (goal) {
       TrainingGoal.fiveK => 3.0,
       TrainingGoal.tenK => 4.0,
       TrainingGoal.halfMarathon => 5.0,
       TrainingGoal.marathon => 6.0,
     };
-
-    return base < minimum ? minimum : base;
+    final base = p.average > 0 ? p.average : p.longest * .55;
+    return base.clamp(minimum, p.longest > 0 ? p.longest : minimum).toDouble();
   }
 
-  double _tempoDistance(TrainingGoal goal) {
-    switch (goal) {
-      case TrainingGoal.fiveK:
-        return 4.0;
-      case TrainingGoal.tenK:
-        return 5.0;
-      case TrainingGoal.halfMarathon:
-        return 7.0;
-      case TrainingGoal.marathon:
-        return 8.0;
+  double _qualityDistance(TrainingGoal goal) => switch (goal) {
+    TrainingGoal.fiveK => 5,
+    TrainingGoal.tenK => 6.5,
+    TrainingGoal.halfMarathon => 8,
+    TrainingGoal.marathon => 9,
+  };
+  double _tempoDistance(TrainingGoal goal) => switch (goal) {
+    TrainingGoal.fiveK => 4.5,
+    TrainingGoal.tenK => 6,
+    TrainingGoal.halfMarathon => 8,
+    TrainingGoal.marathon => 10,
+  };
+  double _taperDistance(TrainingGoal goal) => switch (goal) {
+    TrainingGoal.fiveK => 3,
+    TrainingGoal.tenK => 4,
+    TrainingGoal.halfMarathon => 4.5,
+    TrainingGoal.marathon => 5,
+  };
+  String _intervalDescription(TrainingGoal goal, _Phase phase) =>
+      phase == _Phase.base
+      ? 'Controlled running-economy repetitions with easy recovery. Finish composed, never sprinted.'
+      : switch (goal) {
+          TrainingGoal.fiveK => '400–1000 m repetitions around controlled 5K effort. Include warm-up and cooldown.',
+          TrainingGoal.tenK => '800 m–2 km repetitions around 10K effort. Build rhythm, not exhaustion.',
+          TrainingGoal.halfMarathon => 'Cruise intervals near threshold with short recovery; practise sustainable form.',
+          TrainingGoal.marathon => 'Controlled aerobic intervals below all-out effort so the long run remains high quality.',
+        };
+  String _tempoDescription(TrainingGoal goal) => switch (goal) {
+    TrainingGoal.fiveK => 'Controlled threshold run. Strong and sustainable; finish feeling you could complete another short block.',
+    TrainingGoal.tenK => 'Sustained threshold work. Stay smooth rather than chasing a hard final kilometre.',
+    TrainingGoal.halfMarathon => 'Cruise tempo or half-marathon-pace blocks. Practise sustainable effort and fueling rhythm.',
+    TrainingGoal.marathon => 'Marathon-specific steady work. Practise relaxed form and nutrition without turning this into a race.',
+  };
+  String _longRunDescription(TrainingGoal goal, _Phase phase) {
+    if (phase == _Phase.recovery) {
+      return 'Reduced long aerobic run for recovery. Keep it genuinely easy so adaptation can catch up.';
     }
-  }
-
-  double _longRunDistance(
-    TrainingGoal goal,
-    double longestRecent,
-    int week,
-    int totalWeeks,
-  ) {
-    final goalDistance =
-        _goalDistanceKm(goal);
-
-    final startingPoint =
-        longestRecent > 0
-            ? longestRecent * 1.05
-            : goalDistance * 0.35;
-
-    final peakFraction = switch (goal) {
-      TrainingGoal.fiveK => 0.9,
-      TrainingGoal.tenK => 1.2,
-      TrainingGoal.halfMarathon => 0.8,
-      TrainingGoal.marathon => 0.75,
+    if (phase == _Phase.taper) {
+      return 'Short taper run. Stay relaxed and finish with plenty left for race day.';
+    }
+    return switch (goal) {
+      TrainingGoal.fiveK =>
+        'Easy longer aerobic run to build durability and support speed work.',
+      TrainingGoal.tenK => 'Progressive long aerobic run. This may exceed 10K; keep the effort easy.',
+      TrainingGoal.halfMarathon => 'Long aerobic endurance run. Practise fueling and steady pacing for fatigue resistance.',
+      TrainingGoal.marathon => 'Long aerobic endurance run. Practise fueling, hydration, and patient marathon effort; do not race it.',
     };
-
-    final peak =
-        goalDistance * peakFraction;
-
-    final progress =
-        totalWeeks <= 1
-            ? 1.0
-            : (week - 1) /
-                (totalWeeks - 1);
-
-    final distance =
-        startingPoint +
-        (peak - startingPoint) *
-            progress;
-
-    final minimum =
-        goal == TrainingGoal.marathon
-            ? 10.0
-            : 6.0;
-
-    return distance < minimum
-        ? minimum
-        : distance;
   }
 
-  double? _targetTempoPace(
-    TrainingPlanRequest request,
-  ) {
-    final targetTime =
-        request.targetTimeSeconds;
-
-    if (targetTime != null &&
-        targetTime > 0) {
-      final raceDistance =
-          _goalDistanceKm(request.goal);
-
-      final racePace =
-          targetTime / raceDistance;
-
-      return racePace * 1.08;
-    }
-
-    final averagePace =
-        request.fitnessSummary
-            ?.averagePaceMinPerKm;
-
-    if (averagePace == null) {
-      return null;
-    }
-
-    return averagePace * 1.08;
-  }
-
-  String _weekFocus(
-    TrainingGoal goal,
-    int week,
-    int totalWeeks,
-  ) {
-    if (week == totalWeeks) {
-      return 'Race week and taper';
-    }
-
-    if (goal == TrainingGoal.fiveK) {
-      if (week <= (totalWeeks / 3).ceil()) {
-        return '5K base and speed foundation';
-      }
-
-      if (week <=
-          (totalWeeks * 2 / 3).ceil()) {
-        return '5K-specific speed and threshold';
-      }
-
-      return '5K sharpening';
-    }
-
-    if (week <= (totalWeeks / 3).ceil()) {
-      return 'Base building';
-    }
-
-    if (week <=
-        (totalWeeks * 2 / 3).ceil()) {
-      return 'Build fitness';
-    }
-
-    return 'Peak and sharpen';
-  }
-
-  String _planName(TrainingGoal goal) {
-    switch (goal) {
-      case TrainingGoal.fiveK:
-        return 'AI 5K Training Plan';
-      case TrainingGoal.tenK:
-        return 'AI 10K Training Plan';
-      case TrainingGoal.halfMarathon:
-        return 'AI Half Marathon Training Plan';
-      case TrainingGoal.marathon:
-        return 'AI Marathon Training Plan';
-    }
-  }
+  String _goalLabel(TrainingGoal goal) => switch (goal) {
+    TrainingGoal.fiveK => '5K',
+    TrainingGoal.tenK => '10K',
+    TrainingGoal.halfMarathon => 'Half Marathon',
+    TrainingGoal.marathon => 'Marathon',
+  };
+  String _phaseLabel(_Phase phase) => switch (phase) {
+    _Phase.base => 'base and running economy',
+    _Phase.build => 'aerobic build and threshold',
+    _Phase.specific => 'race-specific endurance',
+    _Phase.peak => 'peak and sharpening',
+    _Phase.recovery => 'recovery and adaptation',
+    _Phase.taper => 'taper',
+    _Phase.race => 'race week',
+  };
 }
 
+enum _Phase { base, build, specific, peak, recovery, taper, race }
 
+class _Profile {
+  _Profile(TrainingPlanRequest request, double goal)
+    : weekly =
+          (request.currentWeeklyMileageKm ??
+                  request.fitnessSummary?.recentWeeklyMileageKm ??
+                  0)
+              .clamp(0, double.infinity)
+              .toDouble(),
+      longest =
+          (request.currentLongestRunKm ??
+                  request.fitnessSummary?.longestRunKm ??
+                  0)
+              .clamp(0, double.infinity)
+              .toDouble(),
+      average = (request.fitnessSummary?.averageDistanceKm ?? goal * .45)
+          .clamp(0, double.infinity)
+          .toDouble();
+  final double weekly;
+  final double longest;
+  final double average;
+}
